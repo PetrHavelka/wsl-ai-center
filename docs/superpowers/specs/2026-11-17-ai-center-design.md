@@ -279,3 +279,101 @@ Z WSL totéž (vyžaduje, aby `127.0.0.1` z WSL dosáhlo na Windows).
 
 Autostart, instalátor, autentizace API, více monitorů / jiná pozice taskbaru,
 úprava `skilled-plus4u-mcp-start` (nastavení URL konzole) – řeší se zvlášť.
+
+---
+
+# Rozšíření 2 (2026-11-17): WSL proxy, restart, logování, config v repu
+
+Schváleno uživatelem. Platí jen Windows; aplikace se klonuje na disk Windows
+(ne `\\wsl.localhost\…`), aby ji mohl použít kdokoli na jiném PC – nic není
+natvrdo, vše se odvozuje od složky aplikace a `config.json`.
+
+## config.json je součást repa
+
+- `config.json` je commitnutý s výchozími hodnotami (cesty přes `%USERPROFILE%`).
+  Aplikace ho jen čte; když chybí → chyba při startu. Chybějící klíče se doplní
+  z výchozích hodnot v kódu.
+- Nové klíče:
+
+```json
+{
+  "logFile": "wsl-ai-center.log",
+  "wslProxy": {
+    "enabled": true,
+    "interfaceAlias": "vEthernet (WSL*)",
+    "wslSubnet": "172.16.0.0/12"
+  }
+}
+```
+
+- `logFile`: relativní cesta = vůči složce aplikace; `%PROMĚNNÉ%` se rozbalí.
+- `state.json`, `*.log`, `*.log.1` jsou v `.gitignore`.
+
+## WSL proxy (režim NAT)
+
+Z WSL v režimu NAT není `127.0.0.1` Windows dosažitelné. `netsh portproxy`
+přesměruje `<IP Windows na síti WSL>:<port>` → `127.0.0.1:<port>`.
+
+- `setup.cmd` (→ `scripts/setup.ps1`), jednorázově, sám si vyžádá admina:
+  - firewall pravidlo `wsl-ai-center proxy`: inbound TCP `port` jen z `wslProxy.wslSubnet`,
+  - naplánovaná úloha `wsl-ai-center proxy` (aktuální uživatel, nejvyšší oprávnění),
+    spouští `scripts/wsl-proxy.ps1`,
+  - odmítne běžet ze síťové cesty (`\\…`),
+  - `setup.cmd -Remove` smaže pravidlo, úlohu i proxy na `port`,
+  - po změně `port` / `wslSubnet` je třeba setup spustit znovu.
+- `scripts/wsl-proxy.ps1` (spouští úloha, admin): spustí službu `iphlpsvc`,
+  zjistí IPv4 rozhraní `interfaceAlias`, smaže staré proxy na `port`, založí novou,
+  zapíše výsledek do `wsl-proxy.log` ve složce aplikace.
+- **Při startu (a restartu) aplikace** Node proxy zajistí: najde rozhraní
+  `interfaceAlias` (`os.networkInterfaces()`); když chybí (WSL neběží nebo
+  mirrored režim) → zaloguje a pokračuje; když proxy už je → hotovo; jinak
+  `schtasks /run` a do 15 s ověří (`netsh interface portproxy show v4tov4`).
+  Chybějící úloha → log „spusť setup.cmd“. Nikdy nezastaví start aplikace.
+- **Žádné průběžné hlídání.** Když se IP WSL změní, uživatel dá v menu Restartovat.
+- `enabled: false` → proxy se neřeší.
+
+## Kontrola Host
+
+Povolený `Host`: `localhost:<port>`, `[::1]:<port>` nebo **libovolná IPv4
+adresa** `:<port>` (požadavky z WSL přes proxy nesou IP Windows na síti WSL).
+DNS rebinding používá doménové jméno, takže IP literál je bezpečný. `Origin`
+→ 403 a non-JSON POST → 415 platí beze změny.
+
+## Restart z menu
+
+Menu: `… / Otevřít SkilledPlus4U MCP Console / ─── / Restartovat / Ukončit`.
+Restartovat = v témže procesu Node: čekající `/open` skončí `shutdown`, server
+a helper se zastaví, znovu se načte `config.json`, založí se logger, server
+(port se může změnit), helper a zajistí se proxy. Chyba při novém startu
+(např. neplatný config, obsazený port) → log a ukončení (exit 1).
+
+## Logování
+
+- Do stdout/stderr **a** do souboru `logFile` (append, UTF-8). Při překročení
+  5 MB se soubor přejmenuje na `<logFile>.1` (přepíše starý) a začne nový.
+  Chyba zápisu do souboru aplikaci nezastaví.
+- Formát řádku: `<ISO čas> INFO|ERROR <zpráva>`.
+- **Každé volání API** = jeden řádek po dokončení:
+  `<METODA> <cesta> <status> <ms>ms <shrnutí>`, např.
+  `POST /sound 200 3ms category=done -> played x.wav`,
+  `POST /open 200 8123ms url=https://e.com/ -> rejected`,
+  `POST /console-url 200 1ms url=http://127.0.0.1:36061/?***`,
+  `POST /open - 2000ms url=… -> client-closed`,
+  `GET /health 403 0ms forbidden origin=https://evil.com host=127.0.0.1:7399`.
+  Query část URL konzole se maskuje (`?***`), protože nese token.
+- Logují se i start, restart, ukončení, výsledek proxy a zprávy helperu.
+
+## Soubory
+
+```
+setup.cmd            jednorázový setup (admin), -Remove = odinstalace
+start.cmd            spuštění aplikace (node src\main.js); zkontroluje, že je node v PATH
+config.json          v repu
+scripts/setup.ps1    firewall + úloha
+scripts/wsl-proxy.ps1  vytvoření portproxy (spouští úloha)
+src/logger.js        logování stdout + soubor s rotací
+src/wslProxy.js      zajištění proxy při startu
+.gitattributes       *.cmd s CRLF
+```
+
+`.ps1` soubory: UTF-8 s BOM. `.cmd`: CRLF konce řádků.
