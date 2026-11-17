@@ -5,14 +5,14 @@ import { createApp } from "../src/app.js";
 
 const CONFIG = { port: 7399, soundsDir: "/s", confirmSoundDir: "/c", confirmTimeoutSec: 30 };
 
-function setup({ soundEnabled = true, pickWav = dir => join(dir, "x.wav") } = {}) {
+function setup({ soundEnabled = true, pickWav = dir => join(dir, "x.wav"), failOpen = false } = {}) {
   const sent = [];
   const saved = [];
   const logs = [];
   let exited = 0;
   const app = createApp({
     config: CONFIG,
-    helper: { send: msg => { sent.push(msg); return true; } },
+    helper: { send: msg => { sent.push(msg); return !(failOpen && msg.cmd === "open"); } },
     version: "0.1.0",
     loadState: () => ({ soundEnabled }),
     saveState: state => saved.push(state),
@@ -20,6 +20,8 @@ function setup({ soundEnabled = true, pickWav = dir => join(dir, "x.wav") } = {}
     logger: { log: m => logs.push(m), error: m => logs.push(m) },
     pickWav
   });
+  app.handleHelperMessage({ event: "ready" });
+  sent.length = 0;
   return { app, sent, saved, logs, exits: () => exited };
 }
 
@@ -103,6 +105,35 @@ test("helper down fails pending confirmations", async () => {
   app.handleHelperDown();
   assert.equal(await ticket.promise, "helper-restarted");
   assert.equal(app.health().pendingConfirms, 0);
+});
+
+test("requestOpen answers helper-restarted before ready and while the helper is down", async () => {
+  const { app, sent } = setup({ soundEnabled: false });
+  app.handleHelperDown();
+  let ticket = app.requestOpen("https://e.com/");
+  assert.equal(await ticket.promise, "helper-restarted");
+  assert.equal(app.health().pendingConfirms, 0);
+  assert.deepEqual(sent, []);
+  app.handleHelperMessage({ event: "ready" });
+  sent.length = 0;
+  ticket = app.requestOpen("https://e.com/");
+  assert.deepEqual(sent.map(m => m.cmd), ["confirm"]);
+  app.shutdown();
+});
+
+test("requestOpen answers helper-restarted before the first ready", async () => {
+  const app = createApp({
+    config: CONFIG, helper: { send: () => true }, version: "0.1.0",
+    loadState: () => ({ soundEnabled: true }), saveState() {}, onExit() {}
+  });
+  assert.equal(await app.requestOpen("https://e.com/").promise, "helper-restarted");
+});
+
+test("yes is reported as helper-restarted when the open command cannot be sent", async () => {
+  const { app } = setup({ failOpen: true });
+  const ticket = app.requestOpen("https://e.com/");
+  app.handleHelperMessage({ event: "confirm", id: ticket.id, result: "yes" });
+  assert.equal(await ticket.promise, "helper-restarted");
 });
 
 test("exit and log events", () => {

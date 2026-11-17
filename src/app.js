@@ -9,6 +9,7 @@ export function createApp({ config, helper, version, loadState, saveState, onExi
   logger = console, pickWav = pickRandomWav, maxPending = 10 }) {
   let soundEnabled = loadState().soundEnabled;
   let consoleUrl = null;
+  let helperReady = false;
 
   function playFrom(dir) {
     if (!soundEnabled) return { played: false, reason: "muted" };
@@ -36,12 +37,13 @@ export function createApp({ config, helper, version, loadState, saveState, onExi
     },
 
     requestOpen(url) {
+      if (!helperReady) return { id: 0, promise: Promise.resolve("helper-restarted") };
       const ticket = queue.enqueue(url);
       if (!ticket) return null;
       return {
         id: ticket.id,
         promise: ticket.promise.then(result => {
-          if (result === "yes") helper.send({ cmd: "open", url });
+          if (result === "yes" && !helper.send({ cmd: "open", url })) return "helper-restarted";
           return result;
         })
       };
@@ -67,6 +69,7 @@ export function createApp({ config, helper, version, loadState, saveState, onExi
     handleHelperMessage(message) {
       switch (message.event) {
         case "ready":
+          helperReady = true;
           helper.send({ cmd: "init", header: `AI Center · port ${config.port}`, soundEnabled });
           helper.send({ cmd: "consoleUrl", url: consoleUrl });
           break;
@@ -94,6 +97,7 @@ export function createApp({ config, helper, version, loadState, saveState, onExi
     },
 
     handleHelperDown() {
+      helperReady = false;
       queue.failAll("helper-restarted");
     },
 
