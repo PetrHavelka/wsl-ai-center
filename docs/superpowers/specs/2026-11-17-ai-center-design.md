@@ -47,13 +47,27 @@ Bez GUI kromě ikony u hodin, jejího kontextového menu a potvrzovacího okénk
 - Port obsazený → vypíše chybu a skončí dřív, než se objeví druhá ikona
   (= ochrana proti dvojímu spuštění).
 - Helper spadne → Node ho znovu spustí s narůstající prodlevou (5 s … 60 s,
-  max. 5 pokusů); čekající potvrzení skončí jako `no`.
+  max. 5 pokusů); čekající potvrzení skončí s důvodem `helper-restarted`.
+  Dokud helper znovu nepošle `ready`, odpovídá `/open` okamžitě
+  `{ "opened": false, "reason": "helper-restarted" }`.
 - Node skončí → helperu se zavře stdin → helper odstraní ikonu a skončí.
 - Položka menu **Ukončit** → helper pošle `exit` → Node zavře server a skončí.
 
 ## REST API
 
 Vše JSON, tělo max. 16 KB. Neplatný JSON / chybějící pole → `400` (kromě `/sound`).
+
+### Ochrana proti požadavkům z prohlížeče
+
+- Požadavek s hlavičkou `Origin` nebo s hlavičkou `Host` jinou než
+  `127.0.0.1:<port>` / `localhost:<port>` dostane `403 { "error": "forbidden" }`.
+- `POST` s jiným `Content-Type` než `application/json` (parametry jako
+  `; charset=utf-8` jsou povoleny) dostane `415`.
+- Výjimka `/sound`: zůstává u `200` a nic nepřehraje,
+  `{ "played": false, "reason": "forbidden" }` (Origin/Host) nebo
+  `"bad-request"` (Content-Type).
+- Kontroly běží po routování (404/405), před čtením těla; `GET /health`
+  a `DELETE /console-url` podléhají jen kontrole Origin/Host.
 
 ### `POST /sound`
 
@@ -67,7 +81,7 @@ Vše JSON, tělo max. 16 KB. Neplatný JSON / chybějící pole → `400` (krom�
 - **Vždy `200`**, i při vypnutém zvuku, neznámé kategorii, chybějící/prázdné
   složce nebo neplatném těle. Tělo odpovědi jen informuje:
   `{ "played": true, "file": "x.wav" }` nebo
-  `{ "played": false, "reason": "muted" | "unknown-category" | "no-sounds" | "bad-request" }`.
+  `{ "played": false, "reason": "muted" | "unknown-category" | "no-sounds" | "bad-request" | "forbidden" }`.
 - Nový zvuk přeruší právě hrající (chování Windows `PlaySound`).
 
 ### `POST /open`
@@ -80,7 +94,8 @@ Vše JSON, tělo max. 16 KB. Neplatný JSON / chybějící pole → `400` (krom�
 - Zobrazí popup **Otevřít / Zamítnout** s odpočtem `confirmTimeoutSec`
   a přehraje zvuk popupu (viz níže).
 - Odpověď počká na rozhodnutí:
-  `{ "opened": true }` nebo `{ "opened": false, "reason": "rejected" | "timeout" | "helper-restarted" }`.
+  `{ "opened": true }` nebo `{ "opened": false, "reason": "rejected" | "timeout" | "helper-restarted" | "shutdown" }`
+  (`shutdown` = čekající požadavky při ukončení aplikace).
 
 #### Souběžné požadavky
 

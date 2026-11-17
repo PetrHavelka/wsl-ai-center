@@ -41,9 +41,11 @@ each with any number of `*.wav` files; a random one is played.
 
 ## API (127.0.0.1 only)
 
+POST requests need `Content-Type: application/json` (415 otherwise). Requests with an `Origin` header (i.e. from a browser) or a foreign `Host` are refused with 403; `/sound` still answers 200 with `reason` `forbidden` / `bad-request`.
+
 | Endpoint | Body | Result |
 |---|---|---|
-| `POST /sound` | `{"category":"fail"\|"done"\|"ask"\|"waiting60s"}` | Always 200: `{"played":true,"file":…}` or `{"played":false,"reason":"muted"\|"unknown-category"\|"no-sounds"\|"bad-request"}` |
+| `POST /sound` | `{"category":"fail"\|"done"\|"ask"\|"waiting60s"}` | Always 200: `{"played":true,"file":…}` or `{"played":false,"reason":"muted"\|"unknown-category"\|"no-sounds"\|"bad-request"\|"forbidden"}` |
 | `POST /open` | `{"url":"https://…"}` | Waits for the popup: `{"opened":true}` or `{"opened":false,"reason":"rejected"\|"timeout"\|"helper-restarted"\|"shutdown"}`; 400 non-http(s), 429 more than 10 pending |
 | `POST /console-url` | `{"url":"http://127.0.0.1:…"}` | Sets the tray menu link (loopback only, 400 otherwise) |
 | `DELETE /console-url` | – | Clears it |
