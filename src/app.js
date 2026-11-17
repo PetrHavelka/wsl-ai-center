@@ -59,6 +59,10 @@ export function createApp({ config, helper, version, loadState, saveState, onExi
       return consoleUrl;
     },
 
+    getConsoleUrl() {
+      return consoleUrl;
+    },
+
     health() {
       return {
         ok: true, version, port: config.port, soundEnabled,

@@ -99,6 +99,15 @@ test("ready sends init and the console URL", () => {
   ]);
 });
 
+test("getConsoleUrl returns the current console URL or null", () => {
+  const { app } = setup();
+  assert.equal(app.getConsoleUrl(), null);
+  app.setConsoleUrl("http://127.0.0.1:1/?t=x");
+  assert.equal(app.getConsoleUrl(), "http://127.0.0.1:1/?t=x");
+  app.setConsoleUrl(null);
+  assert.equal(app.getConsoleUrl(), null);
+});
+
 test("helper down fails pending confirmations", async () => {
   const { app } = setup();
   const ticket = app.requestOpen("https://e.com/");

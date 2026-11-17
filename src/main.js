@@ -99,8 +99,10 @@ async function restart() {
   busy = true;
   logger.log("Restarting");
   try {
+    const consoleUrl = app?.getConsoleUrl() ?? null; // survives the restart
     await stop();
     await start();
+    if (consoleUrl) app.setConsoleUrl(consoleUrl);
   } catch (error) {
     fatal(error);
   }
