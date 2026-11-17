@@ -24,6 +24,11 @@ function check(ok, key, what) {
   if (!ok) throw new Error(`config.json: "${key}" must be ${what}`);
 }
 
+function isSubnet(value) {
+  const match = typeof value === "string" ? /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\/(\d{1,2})$/.exec(value) : null;
+  return match !== null && match.slice(1, 5).every(octet => Number(octet) <= 255) && Number(match[5]) <= 32;
+}
+
 const isPath = value => typeof value === "string" && value.trim().length > 0;
 
 export function loadConfig(file = CONFIG_FILE, env = process.env) {
@@ -56,7 +61,7 @@ export function loadConfig(file = CONFIG_FILE, env = process.env) {
   check(isPath(merged.logFile), "logFile", "a non-empty path");
   check(typeof proxy.enabled === "boolean", "wslProxy.enabled", "true or false");
   check(isPath(proxy.interfaceAlias), "wslProxy.interfaceAlias", "a non-empty string");
-  check(typeof proxy.wslSubnet === "string" && /^\d{1,3}(\.\d{1,3}){3}\/\d{1,2}$/.test(proxy.wslSubnet),
+  check(isSubnet(proxy.wslSubnet),
     "wslProxy.wslSubnet", "an IPv4 subnet like 172.16.0.0/12");
 
   return Object.freeze({

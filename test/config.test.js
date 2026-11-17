@@ -87,7 +87,8 @@ test("rejects invalid values", () => {
     { port: 0 }, { port: "80" }, { port: 70000 }, { soundsDir: "" }, { confirmSoundDir: 5 },
     { confirmTimeoutSec: 2 }, { confirmTimeoutSec: 1.5 }, { confirmTimeoutSec: 601 },
     { logFile: "" }, { wslProxy: 5 }, { wslProxy: { enabled: "yes" } }, { wslProxy: { interfaceAlias: "" } },
-    { wslProxy: { wslSubnet: "abc" } }
+    { wslProxy: { wslSubnet: "abc" } }, { wslProxy: { wslSubnet: "999.9.9.9/16" } },
+    { wslProxy: { wslSubnet: "10.0.0.0/33" } }
   ];
   for (const value of bad) {
     const file = tempFile();

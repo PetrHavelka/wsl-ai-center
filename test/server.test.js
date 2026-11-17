@@ -323,3 +323,30 @@ test("any IPv4 literal with the right port is an allowed Host", async () => {
     assert.equal((await get(`172.31.176.1`)).status, 403);
   });
 });
+
+test("tokens in console URLs never reach the log, valid or invalid", async () => {
+  const lines = [];
+  await withServer(fakeApp(), async base => {
+    await post(base, "/console-url", { url: "http://evil.example/?t=SECRET" });
+    await post(base, "/console-url", { url: "http://127.0.0.1:1/p#token=SECRET" });
+    await post(base, "/console-url", { url: "http://user:SECRET@127.0.0.1:1/p" });
+    await post(base, "/console-url", { url: "not a url?t=SECRET" });
+    await waitFor(() => lines.length === 4);
+  }, lines);
+  for (const line of lines) assert.ok(!line.includes("SECRET"), line);
+  assert.match(lines[0], /url=http:\/\/evil\.example\/\?\*\*\* -> invalid$/);
+  assert.match(lines[1], /url=http:\/\/127\.0\.0\.1:1\/p\?\*\*\*$/);
+  assert.match(lines[2], /url=http:\/\/127\.0\.0\.1:1\/p$/);
+  assert.match(lines[3], /url=not a url\?\*\*\* -> invalid$/);
+});
+
+test("control characters in logged values cannot forge log lines", async () => {
+  const lines = [];
+  await withServer(fakeApp(), async base => {
+    await post(base, "/sound", { category: "a\nFAKE line\r" });
+    await rawRequest(base, "/open", { headers: { ...JSON_HEADERS, Origin: "x\ty" }, body: "{}" });
+    await waitFor(() => lines.length === 2);
+  }, lines);
+  assert.ok(lines.every(line => !/[\r\n\t]/.test(line)));
+  assert.match(lines[0], /category=a\\nFAKE line\\r -> played/);
+});

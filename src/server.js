@@ -56,11 +56,26 @@ function isForbidden(req) {
   return !isAllowedHost(req.headers.host, req.socket.localPort);
 }
 
-/** The URL without its query, which may carry a token. */
-function maskQuery(href) {
-  const url = new URL(href);
-  if (url.search) url.search = "?***";
-  return url.href;
+/** origin + path only, with ?*** when a query or fragment (possible token) was dropped; no userinfo. */
+function maskUrl(value) {
+  const text = typeof value === "string" ? value : describeValue(value);
+  try {
+    const url = new URL(text);
+    return url.origin + url.pathname + (url.search || url.hash ? "?***" : "");
+  } catch {
+    const cut = text.search(/[?#]/);
+    return (cut === -1 ? text : text.slice(0, cut) + "?***").slice(0, 200);
+  }
+}
+
+/** Escapes control characters so request data cannot forge log lines. */
+function escapeLog(text) {
+  return String(text).replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, char => {
+    if (char === "\n") return "\\n";
+    if (char === "\r") return "\\r";
+    if (char === "\t") return "\\t";
+    return "\\u" + char.charCodeAt(0).toString(16).padStart(4, "0");
+  });
 }
 
 function describeValue(value) {
@@ -129,11 +144,11 @@ async function handle(app, req, res, ctx) {
   }
   if (path === "/console-url") {
     if (!body || !isLoopbackHttpUrl(body.url)) {
-      ctx.summary = `url=${body ? describeValue(body.url).slice(0, 200) : "?"} -> invalid`;
+      ctx.summary = `url=${body ? maskUrl(body.url) : "?"} -> invalid`;
       return sendJson(res, 400, { error: "url must be an http(s) URL on 127.0.0.1, localhost or [::1]" });
     }
     const href = parseHttpUrl(body.url).href;
-    ctx.summary = `url=${maskQuery(href)}`;
+    ctx.summary = `url=${maskUrl(href)}`;
     return sendJson(res, 200, { consoleUrl: app.setConsoleUrl(href) });
   }
   return handleOpen(app, req, body, res, ctx);
@@ -152,7 +167,7 @@ export function createServer(app, { logger = console } = {}) {
     res.on("close", () => {
       const ms = Math.round(Number(process.hrtime.bigint() - started) / 1e6);
       const status = res.headersSent ? res.statusCode : "-";
-      logger.log(`${req.method} ${ctx.path} ${status} ${ms}ms${ctx.summary ? " " + ctx.summary : ""}`);
+      logger.log(escapeLog(`${req.method} ${ctx.path} ${status} ${ms}ms${ctx.summary ? " " + ctx.summary : ""}`));
     });
     handle(app, req, res, ctx).catch(error => {
       logger.error(`Request failed: ${error.stack ?? error}`);

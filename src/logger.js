@@ -19,7 +19,11 @@ export function createLogger({
       appendFileSync(file, line, "utf-8");
     } catch (error) {
       fileOk = false;
-      stderr.write(`${now().toISOString()} ERROR cannot write log file ${file}: ${error.message}\n`);
+      try {
+        stderr.write(`${now().toISOString()} ERROR cannot write log file ${file}: ${error.message}\n`);
+      } catch {
+        // the logger never throws
+      }
     }
   }
 
