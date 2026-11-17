@@ -17,8 +17,8 @@ function fakeApp() {
   };
 }
 
-async function withServer(app, fn) {
-  const server = createServer(app, { logger: { error() {} } });
+async function withServer(app, fn, lines = []) {
+  const server = createServer(app, { logger: { error() {}, log: line => lines.push(line) } });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
   try {
@@ -214,4 +214,112 @@ test("/sound keeps answering 200 for forbidden and non-JSON requests", async () 
     assert.deepEqual(res.json, { played: false, reason: "bad-request" });
   });
   assert.deepEqual(app.calls, []);
+});
+
+const lastLine = lines => lines.at(-1);
+
+test("/sound logs one request line", async () => {
+  const lines = [];
+  await withServer(fakeApp(), async base => {
+    await post(base, "/sound", { category: "done" });
+    await waitFor(() => lines.length === 1);
+  }, lines);
+  assert.equal(lines.length, 1);
+  assert.match(lines[0], /^POST \/sound 200 \d+ms category=done -> played x\.wav$/);
+});
+
+test("/sound logs the reason and unusable categories", async () => {
+  const lines = [];
+  const app = fakeApp();
+  app.playCategory = category => (category === "nope" ? { played: false, reason: "unknown-category" } : { played: true, file: "x.wav" });
+  await withServer(app, async base => {
+    await post(base, "/sound", { category: "nope" });
+    await post(base, "/sound", { category: 5 });
+    await post(base, "/sound", "{ broken");
+    await waitFor(() => lines.length === 3);
+  }, lines);
+  assert.match(lines[0], /category=nope -> unknown-category$/);
+  assert.match(lines[1], /category=5 -> played x\.wav$/);
+  assert.match(lines[2], /category=\? -> bad-request$/);
+});
+
+test("/open logs the outcome, invalid input and client abort", async () => {
+  const lines = [];
+  const app = fakeApp();
+  await withServer(app, async base => {
+    app.openResult = "no";
+    await post(base, "/open", { url: "https://e.com/" });
+    await waitFor(() => lines.length === 1);
+    assert.match(lastLine(lines), /^POST \/open 200 \d+ms url=https:\/\/e\.com\/ -> rejected$/);
+    app.openResult = "yes";
+    await post(base, "/open", { url: "https://e.com/" });
+    await waitFor(() => lines.length === 2);
+    assert.match(lastLine(lines), /-> opened$/);
+    await post(base, "/open", { url: "x".repeat(300) });
+    await waitFor(() => lines.length === 3);
+    assert.match(lastLine(lines), new RegExp(` 400 \\d+ms url=x{200} -> invalid$`));
+
+    let finish;
+    app.requestOpen = () => ({ id: 9, promise: new Promise(resolve => { finish = resolve; }) });
+    app.cancelOpen = () => finish("cancelled");
+    const controller = new AbortController();
+    const pending = post(base, "/open", { url: "https://e.com/" }, { signal: controller.signal }).catch(e => e);
+    await sleep(50);
+    controller.abort();
+    await pending;
+    await waitFor(() => lines.length === 4);
+    assert.match(lastLine(lines), /^POST \/open - \d+ms .*client-closed$/);
+  }, lines);
+  assert.equal(lines.length, 4);
+});
+
+test("/open logs queue-full", async () => {
+  const lines = [];
+  const app = fakeApp();
+  app.requestOpen = () => null;
+  await withServer(app, async base => {
+    await post(base, "/open", { url: "https://e.com/" });
+    await waitFor(() => lines.length === 1);
+  }, lines);
+  assert.match(lines[0], / 429 \d+ms url=https:\/\/e\.com\/ -> queue-full$/);
+});
+
+test("/console-url masks the query in the log", async () => {
+  const lines = [];
+  await withServer(fakeApp(), async base => {
+    await post(base, "/console-url", { url: "http://127.0.0.1:36061/?t=secret" });
+    await post(base, "/console-url", { url: "https://example.com/" });
+    await fetch(base + "/console-url", { method: "DELETE" });
+    await waitFor(() => lines.length === 3);
+  }, lines);
+  assert.match(lines[0], /url=http:\/\/127\.0\.0\.1:36061\/\?\*\*\*$/);
+  assert.ok(!lines[0].includes("secret"));
+  assert.match(lines[1], / 400 \d+ms url=https:\/\/example\.com\/ -> invalid$/);
+  assert.match(lines[2], /^DELETE \/console-url 200 \d+ms cleared$/);
+});
+
+test("refusals are logged", async () => {
+  const lines = [];
+  await withServer(fakeApp(), async base => {
+    await rawRequest(base, "/open", { headers: { ...JSON_HEADERS, Origin: "https://evil.example" }, body: "{}" });
+    await rawRequest(base, "/open", { headers: { "Content-Type": "text/plain" }, body: "{}" });
+    await rawRequest(base, "/open", { body: "{}" });
+    await waitFor(() => lines.length === 3);
+  }, lines);
+  assert.match(lines[0], / 403 \d+ms forbidden origin=https:\/\/evil\.example host=127\.0\.0\.1:\d+$/);
+  assert.match(lines[1], / 415 \d+ms unsupported content-type=text\/plain$/);
+  assert.match(lines[2], / 415 \d+ms unsupported content-type=-$/);
+});
+
+test("any IPv4 literal with the right port is an allowed Host", async () => {
+  await withServer(fakeApp(), async base => {
+    const { port } = new URL(base);
+    const get = host => rawRequest(base, "/health", { method: "GET", headers: { Host: host } });
+    assert.equal((await get(`172.31.176.1:${port}`)).status, 200);
+    assert.equal((await get(`[::1]:${port}`)).status, 200);
+    assert.equal((await get(`evil.example:${port}`)).status, 403);
+    assert.equal((await get(`999.1.1.1:${port}`)).status, 403);
+    assert.equal((await get("172.31.176.1:1")).status, 403);
+    assert.equal((await get(`172.31.176.1`)).status, 403);
+  });
 });

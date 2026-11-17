@@ -38,11 +38,33 @@ async function readJson(req) {
   }
 }
 
-/** Browsers always send Origin on cross-site requests; a foreign Host means DNS rebinding. */
+const IPV4_HOST = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3}):(\d+)$/;
+
+function isAllowedHost(host, port) {
+  if (typeof host !== "string") return false;
+  if (host === `localhost:${port}` || host === `[::1]:${port}`) return true;
+  const match = IPV4_HOST.exec(host);
+  return match !== null && Number(match[5]) === port && match.slice(1, 5).every(octet => Number(octet) <= 255);
+}
+
+/**
+ * Browsers always send Origin on cross-site requests; a Host that is not an IP literal or localhost
+ * means DNS rebinding. IPv4 literals are allowed so the WSL portproxy (Host = Windows IP) works.
+ */
 function isForbidden(req) {
   if (req.headers.origin !== undefined) return true;
-  const port = req.socket.localPort;
-  return req.headers.host !== `127.0.0.1:${port}` && req.headers.host !== `localhost:${port}`;
+  return !isAllowedHost(req.headers.host, req.socket.localPort);
+}
+
+/** The URL without its query, which may carry a token. */
+function maskQuery(href) {
+  const url = new URL(href);
+  if (url.search) url.search = "?***";
+  return url.href;
+}
+
+function describeValue(value) {
+  return typeof value === "string" ? value : JSON.stringify(value) ?? "?";
 }
 
 function isJsonContentType(req) {
@@ -50,39 +72,50 @@ function isJsonContentType(req) {
   return type === "application/json";
 }
 
-async function handleOpen(app, req, body, res) {
+async function handleOpen(app, req, body, res, ctx) {
   const url = body ? parseHttpUrl(body.url) : null;
-  if (!url) return sendJson(res, 400, { error: "url must be an absolute http(s) URL" });
+  if (!url) {
+    ctx.summary = `url=${body ? describeValue(body.url).slice(0, 200) : "?"} -> invalid`;
+    return sendJson(res, 400, { error: "url must be an absolute http(s) URL" });
+  }
+  ctx.summary = `url=${url.href} -> client-closed`; // stays so if the connection drops while waiting
   if (res.destroyed || req.socket.destroyed) return; // req.destroyed is already true once the body was read
   const ticket = app.requestOpen(url.href);
-  if (!ticket) return sendJson(res, 429, { error: "too many pending confirmations" });
+  if (!ticket) {
+    ctx.summary = `url=${url.href} -> queue-full`;
+    return sendJson(res, 429, { error: "too many pending confirmations" });
+  }
   res.on("close", () => {
     if (!res.writableFinished) app.cancelOpen(ticket.id);
   });
   const result = await ticket.promise;
   if (result === "cancelled") return;
+  ctx.summary = `url=${url.href} -> ${result === "yes" ? "opened" : result === "no" ? "rejected" : result}`;
   sendJson(res, 200, result === "yes"
     ? { opened: true }
     : { opened: false, reason: result === "no" ? "rejected" : result });
 }
 
-async function handle(app, req, res) {
-  const path = new URL(req.url, "http://localhost").pathname;
+async function handle(app, req, res, ctx) {
+  const path = ctx.path;
   const allowed = ROUTES[path];
   if (!allowed) return sendJson(res, 404, { error: "not found" });
   if (!allowed.includes(req.method)) {
     return sendJson(res, 405, { error: "method not allowed" }, { Allow: allowed.join(", ") });
   }
   if (isForbidden(req)) {
+    ctx.summary = `forbidden origin=${req.headers.origin ?? "-"} host=${req.headers.host ?? "-"}`;
     return path === "/sound"
       ? sendJson(res, 200, { played: false, reason: "forbidden" })
       : sendJson(res, 403, { error: "forbidden" });
   }
   if (path === "/health") return sendJson(res, 200, app.health());
   if (path === "/console-url" && req.method === "DELETE") {
+    ctx.summary = "cleared";
     return sendJson(res, 200, { consoleUrl: app.setConsoleUrl(null) });
   }
   if (!isJsonContentType(req)) {
+    ctx.summary = `unsupported content-type=${req.headers["content-type"] ?? "-"}`;
     return path === "/sound"
       ? sendJson(res, 200, { played: false, reason: "bad-request" })
       : sendJson(res, 415, { error: "Content-Type must be application/json" });
@@ -90,20 +123,38 @@ async function handle(app, req, res) {
 
   const body = await readJson(req);
   if (path === "/sound") {
-    return sendJson(res, 200, body ? app.playCategory(body.category) : { played: false, reason: "bad-request" });
+    const result = body ? app.playCategory(body.category) : { played: false, reason: "bad-request" };
+    ctx.summary = `category=${body ? describeValue(body.category) : "?"} -> ${result.played ? `played ${result.file}` : result.reason}`;
+    return sendJson(res, 200, result);
   }
   if (path === "/console-url") {
     if (!body || !isLoopbackHttpUrl(body.url)) {
+      ctx.summary = `url=${body ? describeValue(body.url).slice(0, 200) : "?"} -> invalid`;
       return sendJson(res, 400, { error: "url must be an http(s) URL on 127.0.0.1, localhost or [::1]" });
     }
-    return sendJson(res, 200, { consoleUrl: app.setConsoleUrl(parseHttpUrl(body.url).href) });
+    const href = parseHttpUrl(body.url).href;
+    ctx.summary = `url=${maskQuery(href)}`;
+    return sendJson(res, 200, { consoleUrl: app.setConsoleUrl(href) });
   }
-  return handleOpen(app, req, body, res);
+  return handleOpen(app, req, body, res, ctx);
 }
 
 export function createServer(app, { logger = console } = {}) {
   return http.createServer((req, res) => {
-    handle(app, req, res).catch(error => {
+    const started = process.hrtime.bigint();
+    let path = "?";
+    try {
+      path = new URL(req.url, "http://localhost").pathname;
+    } catch {
+      // handled below as 404
+    }
+    const ctx = { path, summary: "" };
+    res.on("close", () => {
+      const ms = Math.round(Number(process.hrtime.bigint() - started) / 1e6);
+      const status = res.headersSent ? res.statusCode : "-";
+      logger.log(`${req.method} ${ctx.path} ${status} ${ms}ms${ctx.summary ? " " + ctx.summary : ""}`);
+    });
+    handle(app, req, res, ctx).catch(error => {
       logger.error(`Request failed: ${error.stack ?? error}`);
       if (!res.headersSent) sendJson(res, 500, { error: error.message });
       else res.destroy();
