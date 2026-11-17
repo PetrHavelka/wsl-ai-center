@@ -1,3 +1,4 @@
+import http from "node:http";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -137,4 +138,80 @@ test("/console-url accepts loopback only and can be cleared", async () => {
     assert.deepEqual(await res.json(), { consoleUrl: null });
   });
   assert.deepEqual(app.calls, [["console", "http://127.0.0.1:36061/?t=abc"], ["console", null]]);
+});
+
+/** Raw request, so that Origin, Host and Content-Type can be set freely. */
+function rawRequest(base, path, { method = "POST", headers = {}, body } = {}) {
+  const { port } = new URL(base);
+  return new Promise((resolve, reject) => {
+    const req = http.request({ host: "127.0.0.1", port, path, method, headers }, res => {
+      const chunks = [];
+      res.on("data", chunk => chunks.push(chunk));
+      res.on("end", () => resolve({ status: res.statusCode, json: JSON.parse(Buffer.concat(chunks).toString("utf-8")) }));
+    });
+    req.on("error", reject);
+    req.end(body);
+  });
+}
+
+const JSON_HEADERS = { "Content-Type": "application/json" };
+
+test("requests with an Origin header are refused with 403", async () => {
+  const app = fakeApp();
+  await withServer(app, async base => {
+    const headers = { ...JSON_HEADERS, Origin: "https://evil.example" };
+    let res = await rawRequest(base, "/open", { headers, body: JSON.stringify({ url: "https://e.com/" }) });
+    assert.equal(res.status, 403);
+    assert.deepEqual(res.json, { error: "forbidden" });
+    res = await rawRequest(base, "/console-url", { headers, body: JSON.stringify({ url: "http://127.0.0.1:1/" }) });
+    assert.equal(res.status, 403);
+    res = await rawRequest(base, "/console-url", { method: "DELETE", headers: { Origin: "https://evil.example" } });
+    assert.equal(res.status, 403);
+    res = await rawRequest(base, "/health", { method: "GET", headers: { Origin: "https://evil.example" } });
+    assert.equal(res.status, 403);
+  });
+  assert.deepEqual(app.calls, []);
+});
+
+test("a Host header other than loopback:port is refused with 403", async () => {
+  const app = fakeApp();
+  await withServer(app, async base => {
+    const { port } = new URL(base);
+    const body = JSON.stringify({ url: "https://e.com/" });
+    let res = await rawRequest(base, "/open", { headers: { ...JSON_HEADERS, Host: "evil.example" }, body });
+    assert.equal(res.status, 403);
+    res = await rawRequest(base, "/open", { headers: { ...JSON_HEADERS, Host: `evil.example:${port}` }, body });
+    assert.equal(res.status, 403);
+    res = await rawRequest(base, "/open", { headers: { ...JSON_HEADERS, Host: `localhost:${port}` }, body });
+    assert.equal(res.status, 200);
+  });
+});
+
+test("a POST that is not application/json is refused with 415", async () => {
+  const app = fakeApp();
+  await withServer(app, async base => {
+    const body = JSON.stringify({ url: "https://e.com/" });
+    let res = await rawRequest(base, "/open", { headers: { "Content-Type": "text/plain" }, body });
+    assert.equal(res.status, 415);
+    assert.deepEqual(res.json, { error: "Content-Type must be application/json" });
+    res = await rawRequest(base, "/open", { body });
+    assert.equal(res.status, 415);
+    res = await rawRequest(base, "/open", { headers: { "Content-Type": "Application/JSON; charset=utf-8" }, body });
+    assert.equal(res.status, 200);
+  });
+  assert.deepEqual(app.calls, [["open", "https://e.com/"]]);
+});
+
+test("/sound keeps answering 200 for forbidden and non-JSON requests", async () => {
+  const app = fakeApp();
+  await withServer(app, async base => {
+    const body = JSON.stringify({ category: "done" });
+    let res = await rawRequest(base, "/sound", { headers: { ...JSON_HEADERS, Origin: "https://evil.example" }, body });
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.json, { played: false, reason: "forbidden" });
+    res = await rawRequest(base, "/sound", { headers: { "Content-Type": "text/plain" }, body });
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.json, { played: false, reason: "bad-request" });
+  });
+  assert.deepEqual(app.calls, []);
 });

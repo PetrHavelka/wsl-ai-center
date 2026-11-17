@@ -38,9 +38,22 @@ async function readJson(req) {
   }
 }
 
-async function handleOpen(app, body, res) {
+/** Browsers always send Origin on cross-site requests; a foreign Host means DNS rebinding. */
+function isForbidden(req) {
+  if (req.headers.origin !== undefined) return true;
+  const port = req.socket.localPort;
+  return req.headers.host !== `127.0.0.1:${port}` && req.headers.host !== `localhost:${port}`;
+}
+
+function isJsonContentType(req) {
+  const type = (req.headers["content-type"] ?? "").split(";")[0].trim().toLowerCase();
+  return type === "application/json";
+}
+
+async function handleOpen(app, req, body, res) {
   const url = body ? parseHttpUrl(body.url) : null;
   if (!url) return sendJson(res, 400, { error: "url must be an absolute http(s) URL" });
+  if (res.destroyed || req.socket.destroyed) return; // req.destroyed is already true once the body was read
   const ticket = app.requestOpen(url.href);
   if (!ticket) return sendJson(res, 429, { error: "too many pending confirmations" });
   res.on("close", () => {
@@ -60,9 +73,19 @@ async function handle(app, req, res) {
   if (!allowed.includes(req.method)) {
     return sendJson(res, 405, { error: "method not allowed" }, { Allow: allowed.join(", ") });
   }
+  if (isForbidden(req)) {
+    return path === "/sound"
+      ? sendJson(res, 200, { played: false, reason: "forbidden" })
+      : sendJson(res, 403, { error: "forbidden" });
+  }
   if (path === "/health") return sendJson(res, 200, app.health());
   if (path === "/console-url" && req.method === "DELETE") {
     return sendJson(res, 200, { consoleUrl: app.setConsoleUrl(null) });
+  }
+  if (!isJsonContentType(req)) {
+    return path === "/sound"
+      ? sendJson(res, 200, { played: false, reason: "bad-request" })
+      : sendJson(res, 415, { error: "Content-Type must be application/json" });
   }
 
   const body = await readJson(req);
@@ -75,7 +98,7 @@ async function handle(app, req, res) {
     }
     return sendJson(res, 200, { consoleUrl: app.setConsoleUrl(parseHttpUrl(body.url).href) });
   }
-  return handleOpen(app, body, res);
+  return handleOpen(app, req, body, res);
 }
 
 export function createServer(app, { logger = console } = {}) {
