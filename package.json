@@ -1,0 +1,12 @@
+{
+  "name": "wsl-ai-center",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Windows tray app with a local REST API for AI agents: sounds, confirmed URL opening, MCP console link.",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node src/main.js",
+    "test": "node --test"
+  }
+}
