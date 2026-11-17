@@ -246,6 +246,7 @@ function Show-Popup($Id, [string]$Url, [int]$TimeoutSec, [int]$Waiting) {
     $l.Location = New-Object System.Drawing.Point $X, $Y
     $l.Size = New-Object System.Drawing.Size $Width, $Height
     $l.AutoEllipsis = $true
+    $l.UseMnemonic = $false
     $l.ForeColor = $Color
     $l.Font = $Font
     $form.Controls.Add($l)
