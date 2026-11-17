@@ -26,6 +26,15 @@ test("findWslHostIp skips internal and IPv6, null without match", () => {
   assert.equal(findWslHostIp("vEthernet (WSL*)", { "vEthernet (WSL)": [{ address: "::1", family: "IPv6", internal: false }] }), null);
 });
 
+test("findWslHostIp ignores link-local 169.254.* addresses", () => {
+  const ifaces = { "vEthernet (WSL)": [
+    { address: "169.254.1.2", family: "IPv4", internal: false },
+    { address: "172.28.0.1", family: "IPv4", internal: false }
+  ] };
+  assert.equal(findWslHostIp(ALIAS, ifaces), "172.28.0.1");
+  assert.equal(findWslHostIp(ALIAS, { "vEthernet (WSL)": [ifaces["vEthernet (WSL)"][0]] }), null);
+});
+
 function setup({ enabled = true, interfaces = IFACES, results = [], timeoutMs = 20, pollMs = 5 } = {}) {
   const calls = [];
   const logs = [];

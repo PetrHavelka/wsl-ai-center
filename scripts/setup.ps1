@@ -9,14 +9,14 @@ $ErrorActionPreference = 'Stop'
 
 $TASK_NAME = 'wsl-ai-center proxy'
 $RULE_NAME = 'wsl-ai-center proxy'
-$APP_ROOT = (Resolve-Path (Split-Path -Parent $PSScriptRoot)).ProviderPath
+$APP_ROOT = (Resolve-Path -LiteralPath (Split-Path -Parent $PSScriptRoot)).ProviderPath
 $PROXY_SCRIPT = Join-Path $APP_ROOT 'scripts\wsl-proxy.ps1'
 
 function Get-ProxyConfig {
   $result = @{ Port = 7399; InterfaceAlias = 'vEthernet (WSL*)'; WslSubnet = '172.16.0.0/12' }
   $file = Join-Path $APP_ROOT 'config.json'
-  if (Test-Path $file) {
-    $config = Get-Content -Raw -Encoding UTF8 $file | ConvertFrom-Json
+  if (Test-Path -LiteralPath $file) {
+    $config = Get-Content -Raw -Encoding UTF8 -LiteralPath $file | ConvertFrom-Json
     if ($config.port) { $result.Port = [int]$config.port }
     if ($config.wslProxy) {
       if ($config.wslProxy.interfaceAlias) { $result.InterfaceAlias = [string]$config.wslProxy.interfaceAlias }
@@ -42,10 +42,14 @@ function Remove-FirewallRules {
 }
 
 function Remove-PortProxies([int]$port) {
-  netsh interface portproxy show v4tov4 |
+  $listing = netsh interface portproxy show v4tov4 2>&1
+  if ($LASTEXITCODE -ne 0) { throw "netsh show failed: $($listing -join ' ')" }
+  $listing |
     Select-String "^\s*(\S+)\s+$port\s" |
     ForEach-Object {
-      netsh interface portproxy delete v4tov4 listenaddress=$($_.Matches[0].Groups[1].Value) listenport=$port | Out-Null
+      $listenAddress = $_.Matches[0].Groups[1].Value
+      $output = netsh interface portproxy delete v4tov4 listenaddress=$listenAddress listenport=$port 2>&1
+      if ($LASTEXITCODE -ne 0) { throw "netsh delete failed for ${listenAddress}:${port}: $($output -join ' ')" }
     }
 }
 
@@ -60,7 +64,9 @@ function Install-ProxyTask {
   $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
     -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PROXY_SCRIPT`""
   $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Highest
-  Register-ScheduledTask -TaskName $TASK_NAME -Action $action -Principal $principal -Force | Out-Null
+  $taskSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+    -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::FromMinutes(5))
+  Register-ScheduledTask -TaskName $TASK_NAME -Action $action -Principal $principal -Settings $taskSettings -Force | Out-Null
 }
 
 if ($APP_ROOT.StartsWith('\\')) {
@@ -71,7 +77,13 @@ if ($APP_ROOT.StartsWith('\\')) {
 }
 
 if (-not (Test-IsAdmin)) {
-  Start-Elevated
+  try {
+    Start-Elevated
+  } catch {
+    Write-Host "Could not start elevated (UAC cancelled?): $($_.Exception.Message)" -ForegroundColor Red
+    Read-Host 'Press Enter to close'
+    exit 1
+  }
   exit
 }
 
@@ -83,7 +95,7 @@ try {
     Remove-PortProxies $settings.Port
     Write-Host "Removed firewall rule, scheduled task and port proxy on port $($settings.Port)." -ForegroundColor Green
   } else {
-    if (-not (Test-Path $PROXY_SCRIPT)) { throw "Missing $PROXY_SCRIPT" }
+    if (-not (Test-Path -LiteralPath $PROXY_SCRIPT)) { throw "Missing $PROXY_SCRIPT" }
     Install-FirewallRule $settings
     Install-ProxyTask
     Write-Host "Done. Firewall rule '$RULE_NAME' (TCP $($settings.Port) from $($settings.WslSubnet)) and scheduled task '$TASK_NAME' created." -ForegroundColor Green

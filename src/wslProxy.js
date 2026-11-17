@@ -14,7 +14,7 @@ export function findWslHostIp(alias, interfaces = networkInterfaces()) {
   const re = aliasToRegExp(alias);
   for (const [name, addresses] of Object.entries(interfaces)) {
     if (!re.test(name)) continue;
-    const found = (addresses ?? []).find(a => !a.internal && (a.family === "IPv4" || a.family === 4));
+    const found = (addresses ?? []).find(a => !a.internal && (a.family === "IPv4" || a.family === 4) && !a.address.startsWith("169.254."));
     return found ? found.address : null;
   }
   return null;

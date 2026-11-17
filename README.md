@@ -37,7 +37,7 @@ It asks for administrator rights (UAC) once and creates:
 - a firewall rule `wsl-ai-center proxy` allowing TCP `port` from `wslProxy.wslSubnet`,
 - a scheduled task `wsl-ai-center proxy` (highest privileges, runs `scripts\wsl-proxy.ps1`) that creates a `netsh portproxy` from the Windows IP on the WSL network to `127.0.0.1:<port>`.
 
-Run it again after changing `port` or `wslProxy.wslSubnet`.
+To change `port` or `wslProxy.wslSubnet`: run `setup.cmd -Remove` first, then edit `config.json`, then run `setup.cmd` again. Otherwise the proxy of the old port stays in place.
 `setup.cmd -Remove` deletes the rule, the task and the port proxy.
 
 ## Start
