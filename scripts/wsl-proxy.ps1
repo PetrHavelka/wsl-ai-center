@@ -1,26 +1,17 @@
-﻿# Runs elevated via the "wsl-ai-center proxy" scheduled task (created by setup.ps1).
+﻿# Runs elevated via the "wsl-ai-center proxy" scheduled task (created by setup.ps1) from
+# %ProgramFiles%\wsl-ai-center, with fixed arguments. Reads no config and no user-writable path.
 # Forwards <Windows IP on the WSL network>:<port> -> 127.0.0.1:<port>.
+
+param(
+  [Parameter(Mandatory)][int]$Port,
+  [Parameter(Mandatory)][string]$InterfaceAlias,
+  [Parameter(Mandatory)][string]$LogFile
+)
 
 $ErrorActionPreference = 'Stop'
 
-$APP_ROOT = (Resolve-Path -LiteralPath (Split-Path -Parent $PSScriptRoot)).ProviderPath
-$LOG_FILE = Join-Path $APP_ROOT 'wsl-proxy.log'
-
 function Write-Log([string]$message) {
-  "$((Get-Date).ToString('s', [Globalization.CultureInfo]::InvariantCulture)) $message" | Out-File -FilePath $LOG_FILE -Append -Encoding utf8
-}
-
-function Get-ProxyConfig {
-  $result = @{ Port = 7399; InterfaceAlias = 'vEthernet (WSL*)' }
-  $file = Join-Path $APP_ROOT 'config.json'
-  if (Test-Path -LiteralPath $file) {
-    $config = Get-Content -Raw -Encoding UTF8 -LiteralPath $file | ConvertFrom-Json
-    if ($config.port) { $result.Port = [int]$config.port }
-    if ($config.wslProxy -and $config.wslProxy.interfaceAlias) {
-      $result.InterfaceAlias = [string]$config.wslProxy.interfaceAlias
-    }
-  }
-  return $result
+  "$((Get-Date).ToString('s', [Globalization.CultureInfo]::InvariantCulture)) $message" | Out-File -LiteralPath $LogFile -Append -Encoding utf8
 }
 
 function Remove-StaleProxies([int]$port) {
@@ -37,9 +28,8 @@ function Remove-StaleProxies([int]$port) {
 }
 
 try {
-  $settings = Get-ProxyConfig
-  $port = $settings.Port
-  $alias = $settings.InterfaceAlias
+  $port = $Port
+  $alias = $InterfaceAlias
 
   # portproxy depends on the IP Helper service
   Start-Service -Name iphlpsvc

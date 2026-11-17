@@ -316,14 +316,17 @@ přesměruje `<IP Windows na síti WSL>:<port>` → `127.0.0.1:<port>`.
 
 - `setup.cmd` (→ `scripts/setup.ps1`), jednorázově, sám si vyžádá admina:
   - firewall pravidlo `wsl-ai-center proxy`: inbound TCP `port` jen z `wslProxy.wslSubnet`,
-  - naplánovaná úloha `wsl-ai-center proxy` (aktuální uživatel, nejvyšší oprávnění),
-    spouští `scripts/wsl-proxy.ps1`,
-  - odmítne běžet ze síťové cesty (`\\…`),
-  - `setup.cmd -Remove` smaže pravidlo, úlohu i proxy na `port`,
+  - kopie `scripts/wsl-proxy.ps1` do `%ProgramFiles%\wsl-ai-center\` (zapisovat tam smějí jen
+    admini; složka aplikace je zapisovatelná uživatelem i z WSL, proto z ní úloha neběží),
+  - naplánovaná úloha `wsl-ai-center proxy` (účet, který setup spustil, nejvyšší oprávnění),
+    spouští tu kopii s pevnými argumenty `-Port -InterfaceAlias -LogFile` z `config.json` v době setupu;
+    účet po zvýšení oprávnění musí být stejný (jinak chyba: vlastní účet musí být lokální admin),
+  - odmítne běžet ze síťové cesty (`\\…`) i ze síťového disku,
+  - `setup.cmd -Remove` smaže pravidlo, úlohu, `%ProgramFiles%\wsl-ai-center\` i proxy na `port`,
   - po změně `port` / `wslSubnet` je třeba setup spustit znovu.
-- `scripts/wsl-proxy.ps1` (spouští úloha, admin): spustí službu `iphlpsvc`,
+- `scripts/wsl-proxy.ps1` (spouští úloha, admin; parametry `-Port`, `-InterfaceAlias`, `-LogFile`, žádný config): spustí službu `iphlpsvc`,
   zjistí IPv4 rozhraní `interfaceAlias`, smaže staré proxy na `port`, založí novou,
-  zapíše výsledek do `wsl-proxy.log` ve složce aplikace.
+  zapíše výsledek do `%ProgramFiles%\wsl-ai-center\wsl-proxy.log`.
 - **Při startu (a restartu) aplikace** Node proxy zajistí: najde rozhraní
   `interfaceAlias` (`os.networkInterfaces()`); když chybí (WSL neběží nebo
   mirrored režim) → zaloguje a pokračuje; když proxy už je → hotovo; jinak

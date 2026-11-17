@@ -1,16 +1,22 @@
 ﻿# One-time setup for the WSL proxy (needs admin, self-elevates):
 #   - firewall rule allowing WSL to reach the app port
-#   - scheduled task "wsl-ai-center proxy" running scripts\wsl-proxy.ps1 with highest privileges
+#   - a copy of scripts\wsl-proxy.ps1 in %ProgramFiles%\wsl-ai-center (admin-only write access, so
+#     nothing the user or WSL can modify runs elevated)
+#   - scheduled task "wsl-ai-center proxy" running that copy with highest privileges
 # Run with -Remove (setup.cmd -Remove) to undo everything.
 
-param([switch]$Remove)
+param([switch]$Remove, [string]$ForUser)
 
 $ErrorActionPreference = 'Stop'
 
 $TASK_NAME = 'wsl-ai-center proxy'
 $RULE_NAME = 'wsl-ai-center proxy'
 $APP_ROOT = (Resolve-Path -LiteralPath (Split-Path -Parent $PSScriptRoot)).ProviderPath
-$PROXY_SCRIPT = Join-Path $APP_ROOT 'scripts\wsl-proxy.ps1'
+$SOURCE_SCRIPT = Join-Path $APP_ROOT 'scripts\wsl-proxy.ps1'
+$INSTALL_DIR = Join-Path $env:ProgramFiles 'wsl-ai-center'
+$INSTALLED_SCRIPT = Join-Path $INSTALL_DIR 'wsl-proxy.ps1'
+$INSTALLED_LOG = Join-Path $INSTALL_DIR 'wsl-proxy.log'
+$CURRENT_USER = "$env:USERDOMAIN\$env:USERNAME"
 
 function Get-ProxyConfig {
   $result = @{ Port = 7399; InterfaceAlias = 'vEthernet (WSL*)'; WslSubnet = '172.16.0.0/12' }
@@ -31,8 +37,17 @@ function Test-IsAdmin {
   return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
+function Test-NetworkDrive {
+  try {
+    return ([IO.DriveInfo]::new($APP_ROOT)).DriveType -eq 'Network'
+  } catch {
+    return $false
+  }
+}
+
 function Start-Elevated {
-  $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"")
+  $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"",
+    '-ForUser', "`"$CURRENT_USER`"")
   if ($Remove) { $arguments += '-Remove' }
   Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $arguments
 }
@@ -59,19 +74,26 @@ function Install-FirewallRule($settings) {
     -LocalPort $settings.Port -RemoteAddress $settings.WslSubnet -Action Allow | Out-Null
 }
 
-function Install-ProxyTask {
-  $userId = "$env:USERDOMAIN\$env:USERNAME"
-  $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
-    -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PROXY_SCRIPT`""
-  $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Highest
+function Install-ProxyScript {
+  New-Item -ItemType Directory -Path $INSTALL_DIR -Force | Out-Null
+  Copy-Item -LiteralPath $SOURCE_SCRIPT -Destination $INSTALLED_SCRIPT -Force
+}
+
+function Install-ProxyTask($settings) {
+  if ($settings.InterfaceAlias.Contains('"')) { throw 'wslProxy.interfaceAlias must not contain a double quote.' }
+  # All values are fixed at setup time; the script in Program Files does not read config.json
+  $argument = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$INSTALLED_SCRIPT`" " +
+    "-Port $($settings.Port) -InterfaceAlias `"$($settings.InterfaceAlias)`" -LogFile `"$INSTALLED_LOG`""
+  $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $argument
+  $principal = New-ScheduledTaskPrincipal -UserId $CURRENT_USER -LogonType Interactive -RunLevel Highest
   $taskSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
     -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::FromMinutes(5))
   Register-ScheduledTask -TaskName $TASK_NAME -Action $action -Principal $principal -Settings $taskSettings -Force | Out-Null
 }
 
-if ($APP_ROOT.StartsWith('\\')) {
+if ($APP_ROOT.StartsWith('\\') -or (Test-NetworkDrive)) {
   Write-Host "The app is in a network path ($APP_ROOT)." -ForegroundColor Red
-  Write-Host 'Clone it to a Windows drive (e.g. C:\Tools\wsl-ai-center), not to \\wsl.localhost or another UNC path, and run setup.cmd from there.' -ForegroundColor Red
+  Write-Host 'Clone it to a Windows drive (e.g. C:\Tools\wsl-ai-center), not to \\wsl.localhost, another UNC path or a mapped network drive, and run setup.cmd from there.' -ForegroundColor Red
   Read-Host 'Press Enter to close'
   exit 1
 }
@@ -87,18 +109,30 @@ if (-not (Test-IsAdmin)) {
   exit
 }
 
+# -ne is case-insensitive in PowerShell
+if ($ForUser -and ($ForUser -ne $CURRENT_USER)) {
+  Write-Host "Elevated as $CURRENT_USER, but setup was started by $ForUser." -ForegroundColor Red
+  Write-Host 'Your own account must be a local administrator: confirm the UAC prompt, do not enter other credentials.' -ForegroundColor Red
+  Write-Host 'Standard users should use WSL mirrored networking instead (no proxy and no setup needed).' -ForegroundColor Red
+  Read-Host 'Press Enter to close'
+  exit 1
+}
+
 try {
   $settings = Get-ProxyConfig
   if ($Remove) {
     Remove-FirewallRules
     Unregister-ScheduledTask -TaskName $TASK_NAME -Confirm:$false -ErrorAction SilentlyContinue
     Remove-PortProxies $settings.Port
-    Write-Host "Removed firewall rule, scheduled task and port proxy on port $($settings.Port)." -ForegroundColor Green
+    if (Test-Path -LiteralPath $INSTALL_DIR) { Remove-Item -LiteralPath $INSTALL_DIR -Recurse -Force }
+    Write-Host "Removed firewall rule, scheduled task, installed script and port proxy on port $($settings.Port)." -ForegroundColor Green
   } else {
-    if (-not (Test-Path -LiteralPath $PROXY_SCRIPT)) { throw "Missing $PROXY_SCRIPT" }
+    if (-not (Test-Path -LiteralPath $SOURCE_SCRIPT)) { throw "Missing $SOURCE_SCRIPT" }
     Install-FirewallRule $settings
-    Install-ProxyTask
+    Install-ProxyScript
+    Install-ProxyTask $settings
     Write-Host "Done. Firewall rule '$RULE_NAME' (TCP $($settings.Port) from $($settings.WslSubnet)) and scheduled task '$TASK_NAME' created." -ForegroundColor Green
+    Write-Host "The elevated script is installed in $INSTALL_DIR (log: $INSTALLED_LOG). Run setup.cmd again after updating the app."
     Write-Host 'Next step: run start.cmd (no admin needed).'
   }
 } catch {

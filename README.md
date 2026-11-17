@@ -11,7 +11,8 @@ Design: `docs/superpowers/specs/2026-11-17-ai-center-design.md`.
 
 - Windows
 - Node.js 20+ with `node.exe` in `PATH` (Windows Node, not the one in WSL)
-- The app cloned to a Windows drive, not to `\\wsl.localhost\...` or another network path
+- The app cloned to a Windows drive, not to `\\wsl.localhost\...`, another network path or a mapped network drive
+- For the WSL proxy setup: your own account must be a local administrator (UAC asks for consent, not for other credentials). Standard users should use WSL mirrored networking instead and skip the setup
 
 No `npm install` is needed.
 
@@ -22,11 +23,12 @@ git clone <repo-url> C:\Tools\wsl-ai-center
 ```
 
 (`C:\Tools\wsl-ai-center` is just an example, use any Windows folder.)
+`config.json` is tracked in git. If you already have a local, untracked `config.json`, back it up and delete it before `git pull`, otherwise git refuses to overwrite it. Local edits of the tracked file may need merging on later updates.
 Then edit `config.json` if you want other values (see [Configuration](#configuration)).
 
 ## One-time setup (WSL proxy)
 
-Only needed when you want to call the API from WSL (not needed with mirrored networking, see the hooks section).
+Only needed when you want to call the API from WSL (not needed with mirrored networking, see the hooks section). If you do not need the WSL proxy (mirrored networking or no WSL), set `wslProxy.enabled` to `false` in `config.json` to avoid the error line about the missing task at startup.
 
 ```bat
 setup.cmd
@@ -35,10 +37,13 @@ setup.cmd
 It asks for administrator rights (UAC) once and creates:
 
 - a firewall rule `wsl-ai-center proxy` allowing TCP `port` from `wslProxy.wslSubnet`,
-- a scheduled task `wsl-ai-center proxy` (highest privileges, runs `scripts\wsl-proxy.ps1`) that creates a `netsh portproxy` from the Windows IP on the WSL network to `127.0.0.1:<port>`.
+- a copy of `scripts\wsl-proxy.ps1` in `%ProgramFiles%\wsl-ai-center\` and its log `wsl-proxy.log` next to it. The task runs elevated, and the app folder is writable by your user and from WSL (`/mnt/c`), so the elevated task must not run a script from there. `%ProgramFiles%` is writable by administrators only. `port`, the interface alias and the log path are fixed as task arguments at setup time; the script reads no `config.json`,
+- a scheduled task `wsl-ai-center proxy` (your account, highest privileges, runs that copy) that creates a `netsh portproxy` from the Windows IP on the WSL network to `127.0.0.1:<port>`.
+
+After `git pull` that changes `scripts\wsl-proxy.ps1`, run `setup.cmd` again to refresh the installed copy.
 
 To change `port` or `wslProxy.wslSubnet`: run `setup.cmd -Remove` first, then edit `config.json`, then run `setup.cmd` again. Otherwise the proxy of the old port stays in place.
-`setup.cmd -Remove` deletes the rule, the task and the port proxy.
+`setup.cmd -Remove` deletes the rule, the task, `%ProgramFiles%\wsl-ai-center\` and the port proxy.
 
 ## Start
 
@@ -52,7 +57,7 @@ On start (and restart) the app makes sure the proxy exists by running the schedu
 
 - **Zvuky**: sounds on/off (kept in `state.json`)
 - **Otevřít SkilledPlus4U MCP Console**: opens the console link set via `POST /console-url`
-- **Restartovat**: restarts the app in the same process: re-reads `config.json` and re-creates the proxy. Use it after `wsl --shutdown` or a Windows restart (the WSL IP changes then).
+- **Restartovat**: restarts the app in the same process: re-reads `config.json` and re-creates the proxy. Use it after WSL (re)starts (e.g. after `wsl --shutdown`) or if WSL was started after the app (the WSL IP changes then).
 - **Ukončit**: quits the app (or Ctrl+C in its terminal)
 
 ## Configuration
@@ -90,7 +95,7 @@ curl -s -X POST http://127.0.0.1:7399/open  -H "Content-Type: application/json" 
 
 ## Logging
 
-The app logs to stdout/stderr and to `logFile` (append, UTF-8). When the file exceeds 5 MB it is renamed to `<logFile>.1` (replacing the old one) and a new one starts. A write error never stops the app.
+The app logs to stdout/stderr and to `logFile` (append, UTF-8). When the file exceeds 5 MB it is renamed to `<logFile>.1` (replacing the old one) and a new one starts. A rotation error keeps appending to the current file; a write error pauses file logging for 60 s (reported once) and never stops the app.
 
 Line format: `<ISO time> INFO|ERROR <message>`. Every API call is one line after it completes:
 `<METHOD> <path> <status> <ms>ms <summary>`, e.g.
@@ -102,7 +107,7 @@ POST /console-url 200 1ms url=http://127.0.0.1:36061/?***
 ```
 
 The query of the console URL is masked (`?***`) because it carries a token. Start, restart, shutdown, proxy result and helper messages are logged too.
-The proxy script writes its own `wsl-proxy.log` in the app folder (`OK: <ip>:<port> -> 127.0.0.1:<port>` or `ERROR: ...`).
+The proxy script writes its own log to `%ProgramFiles%\wsl-ai-center\wsl-proxy.log` (`OK: <ip>:<port> -> 127.0.0.1:<port>` or `ERROR: ...`).
 
 ## Claude Code hooks
 
