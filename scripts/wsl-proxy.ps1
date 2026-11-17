@@ -8,7 +8,12 @@ param(
   [Parameter(Mandatory)][string]$LogFile
 )
 
+# The task inherits the user's PSModulePath (user-writable Documents\WindowsPowerShell\Modules).
+# Cmdlets below autoload modules, so a planted module would run elevated: use system modules only.
+$env:PSModulePath = Join-Path $PSHOME 'Modules'
+
 $ErrorActionPreference = 'Stop'
+$NETSH = Join-Path $env:SystemRoot 'System32\netsh.exe'
 
 function Write-Log([string]$message) {
   "$((Get-Date).ToString('s', [Globalization.CultureInfo]::InvariantCulture)) $message" | Out-File -LiteralPath $LogFile -Append -Encoding utf8
@@ -16,19 +21,18 @@ function Write-Log([string]$message) {
 
 function Remove-StaleProxies([int]$port) {
   # Old entries may point to a WSL IP from a previous boot
-  $listing = netsh interface portproxy show v4tov4 2>&1
+  $listing = & $NETSH interface portproxy show v4tov4 2>&1
   if ($LASTEXITCODE -ne 0) { throw "netsh show failed: $($listing -join ' ')" }
   $listing |
     Select-String "^\s*(\S+)\s+$port\s" |
     ForEach-Object {
       $listenAddress = $_.Matches[0].Groups[1].Value
-      $output = netsh interface portproxy delete v4tov4 listenaddress=$listenAddress listenport=$port 2>&1
+      $output = & $NETSH interface portproxy delete v4tov4 listenaddress=$listenAddress listenport=$port 2>&1
       if ($LASTEXITCODE -ne 0) { throw "netsh delete failed for ${listenAddress}:${port}: $($output -join ' ')" }
     }
 }
 
 try {
-  $port = $Port
   $alias = $InterfaceAlias
 
   # portproxy depends on the IP Helper service
@@ -43,11 +47,11 @@ try {
   }
   $hostIp = $address.IPAddress
 
-  Remove-StaleProxies $port
-  $output = netsh interface portproxy add v4tov4 listenaddress=$hostIp listenport=$port `
-    connectaddress=127.0.0.1 connectport=$port 2>&1
+  Remove-StaleProxies $Port
+  $output = & $NETSH interface portproxy add v4tov4 listenaddress=$hostIp listenport=$Port `
+    connectaddress=127.0.0.1 connectport=$Port 2>&1
   if ($LASTEXITCODE -ne 0) { throw "netsh add failed: $($output -join ' ')" }
-  Write-Log "OK: $($hostIp):$port -> 127.0.0.1:$port"
+  Write-Log "OK: $($hostIp):$Port -> 127.0.0.1:$Port"
 } catch {
   Write-Log "ERROR: $($_.Exception.Message)"
   exit 1

@@ -16,6 +16,8 @@ $SOURCE_SCRIPT = Join-Path $APP_ROOT 'scripts\wsl-proxy.ps1'
 $INSTALL_DIR = Join-Path $env:ProgramFiles 'wsl-ai-center'
 $INSTALLED_SCRIPT = Join-Path $INSTALL_DIR 'wsl-proxy.ps1'
 $INSTALLED_LOG = Join-Path $INSTALL_DIR 'wsl-proxy.log'
+$NETSH = Join-Path $env:SystemRoot 'System32\netsh.exe'
+$POWERSHELL_EXE = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $CURRENT_USER = "$env:USERDOMAIN\$env:USERNAME"
 
 function Get-ProxyConfig {
@@ -57,15 +59,23 @@ function Remove-FirewallRules {
 }
 
 function Remove-PortProxies([int]$port) {
-  $listing = netsh interface portproxy show v4tov4 2>&1
+  $listing = & $NETSH interface portproxy show v4tov4 2>&1
   if ($LASTEXITCODE -ne 0) { throw "netsh show failed: $($listing -join ' ')" }
   $listing |
     Select-String "^\s*(\S+)\s+$port\s" |
     ForEach-Object {
       $listenAddress = $_.Matches[0].Groups[1].Value
-      $output = netsh interface portproxy delete v4tov4 listenaddress=$listenAddress listenport=$port 2>&1
+      $output = & $NETSH interface portproxy delete v4tov4 listenaddress=$listenAddress listenport=$port 2>&1
       if ($LASTEXITCODE -ne 0) { throw "netsh delete failed for ${listenAddress}:${port}: $($output -join ' ')" }
     }
+}
+
+function Assert-ValidSettings($settings) {
+  # Checked before anything is installed; the alias ends up in the task's command line
+  if ($settings.InterfaceAlias -notmatch '^[\w ().*-]+$') {
+    throw "wslProxy.interfaceAlias '$($settings.InterfaceAlias)' may only contain letters, digits, spaces and ( ) . * _ -"
+  }
+  if ($settings.Port -lt 1 -or $settings.Port -gt 65535) { throw "port $($settings.Port) is out of range" }
 }
 
 function Install-FirewallRule($settings) {
@@ -80,11 +90,10 @@ function Install-ProxyScript {
 }
 
 function Install-ProxyTask($settings) {
-  if ($settings.InterfaceAlias.Contains('"')) { throw 'wslProxy.interfaceAlias must not contain a double quote.' }
   # All values are fixed at setup time; the script in Program Files does not read config.json
-  $argument = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$INSTALLED_SCRIPT`" " +
+  $argument = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$INSTALLED_SCRIPT`" " +
     "-Port $($settings.Port) -InterfaceAlias `"$($settings.InterfaceAlias)`" -LogFile `"$INSTALLED_LOG`""
-  $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $argument
+  $action = New-ScheduledTaskAction -Execute $POWERSHELL_EXE -Argument $argument
   $principal = New-ScheduledTaskPrincipal -UserId $CURRENT_USER -LogonType Interactive -RunLevel Highest
   $taskSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
     -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::FromMinutes(5))
@@ -128,6 +137,7 @@ try {
     Write-Host "Removed firewall rule, scheduled task, installed script and port proxy on port $($settings.Port)." -ForegroundColor Green
   } else {
     if (-not (Test-Path -LiteralPath $SOURCE_SCRIPT)) { throw "Missing $SOURCE_SCRIPT" }
+    Assert-ValidSettings $settings
     Install-FirewallRule $settings
     Install-ProxyScript
     Install-ProxyTask $settings
