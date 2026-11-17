@@ -1,0 +1,12 @@
+{
+  "port": 7399,
+  "soundsDir": "%USERPROFILE%\\.claude-sound",
+  "confirmSoundDir": "%USERPROFILE%\\.claude-sound\\confirm",
+  "confirmTimeoutSec": 30,
+  "logFile": "wsl-ai-center.log",
+  "wslProxy": {
+    "enabled": true,
+    "interfaceAlias": "vEthernet (WSL*)",
+    "wslSubnet": "172.16.0.0/12"
+  }
+}
