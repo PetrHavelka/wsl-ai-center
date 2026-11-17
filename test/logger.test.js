@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import * as realFs from "node:fs";
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -61,4 +62,43 @@ test("file null touches no file", () => {
   logger.log("x");
   assert.deepEqual(out, [`${TS} INFO x\n`]);
   assert.equal(existsSync(join(dir, "t.log")), false);
+});
+
+test("a failing rotation keeps appending to the current file and retries later", () => {
+  let renameCalls = 0;
+  const fs = { ...realFs, renameSync: (from, to) => { if (++renameCalls === 1) throw new Error("EBUSY"); realFs.renameSync(from, to); } };
+  const { file, err, logger } = setup({ maxBytes: 100, fs });
+  for (let i = 0; i < 4; i++) logger.log(`line-${i}`);
+  // line-2 wanted to rotate but failed -> appended anyway; line-3 rotates successfully
+  assert.equal(renameCalls, 2);
+  assert.equal(readFileSync(file + ".1", "utf-8"), [0, 1, 2].map(i => `${TS} INFO line-${i}\n`).join(""));
+  assert.equal(readFileSync(file, "utf-8"), `${TS} INFO line-3\n`);
+  assert.equal(err.length, 0);
+});
+
+test("an append failure disables the file for 60 s, reports once, then retries", () => {
+  let time = Date.parse("2026-01-02T03:04:05.000Z");
+  let failing = true;
+  const fs = { ...realFs, appendFileSync: (...args) => { if (failing) throw new Error("EIO"); return realFs.appendFileSync(...args); } };
+  const { file, err, logger } = setup({ fs, now: () => new Date(time) });
+  logger.log("a");
+  logger.log("b");
+  assert.equal(err.filter(l => l.includes("cannot write log file")).length, 1);
+  failing = false;
+  time += 59000;
+  logger.log("c");
+  assert.equal(existsSync(file), false);
+  time += 2000;
+  logger.log("d");
+  assert.match(readFileSync(file, "utf-8"), /INFO d\n$/);
+  assert.doesNotMatch(readFileSync(file, "utf-8"), /INFO c/);
+  // a new failure period reports again
+  failing = true;
+  time += 1000;
+  logger.log("e");
+  logger.log("e2");
+  assert.equal(err.filter(l => l.includes("cannot write log file")).length, 2);
+  time += 61000;
+  logger.log("f");
+  assert.equal(err.filter(l => l.includes("cannot write log file")).length, 3);
 });
