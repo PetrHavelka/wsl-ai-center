@@ -130,3 +130,23 @@ test("stop ends stdin and does not restart", async () => {
   assert.equal(children.length, 1);
   assert.deepEqual(events, []);
 });
+
+test("stop returns a promise that resolves after the child exits", async () => {
+  const { fn, children } = fakeSpawn();
+  const helper = new Helper({ command: "ps", args: [], spawnFn: fn });
+  helper.start();
+  let done = false;
+  const p = helper.stop();
+  assert.ok(p instanceof Promise);
+  p.then(() => { done = true; });
+  await sleep(5);
+  assert.equal(done, false);
+  children[0].emit("exit", 0);
+  await p;
+  assert.equal(done, true);
+});
+
+test("stop without a child resolves immediately", async () => {
+  const helper = new Helper({ command: "ps", args: [], spawnFn: fakeSpawn().fn });
+  await helper.stop();
+});

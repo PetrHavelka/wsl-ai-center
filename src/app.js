@@ -5,7 +5,7 @@ import { SOUND_CATEGORIES, pickRandomWav } from "./sounds.js";
 const CONFIRM_RESULTS = new Set(["yes", "no", "timeout"]);
 
 /** The app's state and decisions; the HTTP server and the helper only talk to this. */
-export function createApp({ config, helper, version, loadState, saveState, onExit,
+export function createApp({ config, helper, version, loadState, saveState, onExit, onRestart = () => {},
   logger = console, pickWav = pickRandomWav, maxPending = 10 }) {
   let soundEnabled = loadState().soundEnabled;
   let consoleUrl = null;
@@ -87,6 +87,9 @@ export function createApp({ config, helper, version, loadState, saveState, onExi
           break;
         case "exit":
           onExit();
+          break;
+        case "restart":
+          onRestart();
           break;
         case "log":
           logger.log(`[helper] ${message.message}`);

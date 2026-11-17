@@ -135,12 +135,14 @@ $headerItem.Enabled = $false
 $soundItem = New-Object System.Windows.Forms.ToolStripMenuItem 'Zvuky'
 $consoleItem = New-Object System.Windows.Forms.ToolStripMenuItem 'Otevřít SkilledPlus4U MCP Console'
 $consoleItem.Enabled = $false
+$restartItem = New-Object System.Windows.Forms.ToolStripMenuItem 'Restartovat'
 $exitItem = New-Object System.Windows.Forms.ToolStripMenuItem 'Ukončit'
 [void]$menu.Items.Add($headerItem)
 [void]$menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
 [void]$menu.Items.Add($soundItem)
 [void]$menu.Items.Add($consoleItem)
 [void]$menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
+[void]$menu.Items.Add($restartItem)
 [void]$menu.Items.Add($exitItem)
 $notify.ContextMenuStrip = $menu
 
@@ -181,6 +183,7 @@ function Start-Sound([string]$Path) {
 
 $soundItem.Add_Click({ Send-Event @{ event = 'toggleSound' } })
 $consoleItem.Add_Click({ if ($script:consoleUrl) { Open-Url $script:consoleUrl } })
+$restartItem.Add_Click({ Send-Event @{ event = 'restart' } })
 $exitItem.Add_Click({
   Send-Event @{ event = 'exit' }
   $script:exitDeadline = (Get-Date).AddSeconds(5)

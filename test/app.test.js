@@ -150,3 +150,19 @@ test("health", () => {
     ok: true, version: "0.1.0", port: 7399, soundEnabled: true, consoleUrl: false, pendingConfirms: 0
   });
 });
+
+test("helper restart event calls onRestart once", () => {
+  let restarts = 0;
+  const app = createApp({
+    config: CONFIG,
+    helper: { send: () => true },
+    version: "0.1.0",
+    loadState: () => ({ soundEnabled: true }),
+    saveState: () => {},
+    onExit: () => {},
+    onRestart: () => { restarts += 1; },
+    logger: { log: () => {}, error: () => {} }
+  });
+  app.handleHelperMessage({ event: "restart" });
+  assert.equal(restarts, 1);
+});

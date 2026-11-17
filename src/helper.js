@@ -45,15 +45,21 @@ export class Helper extends EventEmitter {
     return true;
   }
 
+  /** Resolves when the current child has exited (immediately if none). */
   stop() {
     this.#stopping = true;
     clearTimeout(this.#restartTimer);
     const child = this.#child;
-    if (!child) return;
-    child.stdin.end();
-    const killTimer = setTimeout(() => child.kill(), 3000);
-    killTimer.unref?.();
-    child.once("exit", () => clearTimeout(killTimer));
+    if (!child) return Promise.resolve();
+    return new Promise(resolve => {
+      const killTimer = setTimeout(() => child.kill(), 3000);
+      killTimer.unref?.();
+      child.once("exit", () => {
+        clearTimeout(killTimer);
+        resolve();
+      });
+      child.stdin.end();
+    });
   }
 
   #onLine(raw) {
