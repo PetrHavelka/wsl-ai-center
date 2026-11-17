@@ -24,7 +24,7 @@ export function loadConfig(file = CONFIG_FILE, env = process.env) {
   if (!existsSync(file)) {
     writeFileSync(file, JSON.stringify(DEFAULT_CONFIG, null, 2) + "\n", "utf-8");
   } else {
-    const text = readFileSync(file, "utf-8").replace(/^﻿/, "");
+    const text = readFileSync(file, "utf-8").replace(/^\uFEFF/, "");
     try {
       raw = JSON.parse(text);
     } catch (error) {

@@ -3,7 +3,9 @@
 # one JSON object per line (see docs/superpowers/specs/2026-11-17-ai-center-design.md).
 # It keeps no state worth saving: Node re-sends everything after "ready".
 #
-# Nothing but protocol JSON may ever reach stdout.
+# Nothing but protocol JSON may ever reach stdout. In Windows PowerShell 5.1 with
+# redirected stdout, Write-Host/Write-Warning/Write-Verbose output lands on stdout
+# too, so none of those may be used.
 
 $ErrorActionPreference = 'Continue'
 
@@ -199,7 +201,7 @@ function Close-Popup($Result) {
   if (-not $p) { return }
   $script:popup = $null
   $p.Timer.Stop(); $p.Timer.Dispose()
-  $p.Form.Close(); $p.Form.Dispose()
+  $p.Form.Close()
   if ($Result) { Send-Event @{ event = 'confirm'; id = $p.Id; result = $Result } }
 }
 

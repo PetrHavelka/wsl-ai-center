@@ -2,7 +2,7 @@ import { readFileSync, renameSync, writeFileSync } from "node:fs";
 
 export function loadState(file) {
   try {
-    const data = JSON.parse(readFileSync(file, "utf-8").replace(/^﻿/, ""));
+    const data = JSON.parse(readFileSync(file, "utf-8").replace(/^\uFEFF/, ""));
     return { soundEnabled: data?.soundEnabled !== false };
   } catch {
     return { soundEnabled: true };

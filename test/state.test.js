@@ -21,7 +21,7 @@ test("broken file means sound is on", () => {
 
 test("reads soundEnabled false, with BOM", () => {
   const file = join(tempDir(), "state.json");
-  writeFileSync(file, "﻿" + JSON.stringify({ soundEnabled: false }));
+  writeFileSync(file, "\uFEFF" + JSON.stringify({ soundEnabled: false }));
   assert.deepEqual(loadState(file), { soundEnabled: false });
 });
 
